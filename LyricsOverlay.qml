@@ -10,7 +10,7 @@ Item {
 
   property bool opened: false
   property string pluginPath: Quickshell.env("HOME") + "/.config/omarchy/plugins/susamn.mpd-lyrics"
-  property var lyricsData: ({ state: "stopped", title: "", artist: "", lines: ["", "", "", ""], hasLyrics: false })
+  property var lyricsData: ({ state: "stopped", title: "", artist: "", lines: ["", "", "", "", ""], hasLyrics: false })
 
   property string fontFamily: Style.font.family
   property color background: Color.menu.background
@@ -19,8 +19,8 @@ Item {
   property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
   property color scrim: Color.polkit.scrim
   readonly property int cornerRadius: Style.cornerRadius
-  property int contentMargin: Style.spacing.panelPadding
-  property int cardWidth: Math.min(Style.space(480), panel.width - Style.gapsOut * 2)
+  property int contentMargin: Style.space(20)
+  property int cardWidth: Math.min(Style.space(560), panel.width - Style.gapsOut * 2)
 
   function open(payloadJson) {
     root.opened = true
@@ -142,7 +142,7 @@ Item {
         anchors.rightMargin: card.contentRightInset
         anchors.top: parent.top
         anchors.topMargin: card.contentTopInset
-        spacing: Style.space(12)
+        spacing: Style.space(14)
 
         // Header Row
         Row {
@@ -199,17 +199,17 @@ Item {
           foreground: root.foreground
         }
 
-        // Lyrics 4-Line Synced Window
+        // 5-Row Synced Lyrics Display
         Column {
           width: parent.width
-          spacing: Style.space(6)
+          spacing: Style.space(8)
 
-          // Line 0: Previous line
+          // Row 0: 2 lines above
           Text {
             visible: root.lyricsData.hasLyrics
             width: parent.width
             text: (root.lyricsData.lines && root.lyricsData.lines[0]) ? root.lyricsData.lines[0] : " "
-            color: Qt.darker(root.foreground, 1.6)
+            color: Qt.darker(root.foreground, 1.9)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
@@ -217,19 +217,32 @@ Item {
             wrapMode: Text.NoWrap
           }
 
-          // Line 1: Active Singing Line (Highlighted with Pill / Accent)
+          // Row 1: 1 line above
+          Text {
+            visible: root.lyricsData.hasLyrics
+            width: parent.width
+            text: (root.lyricsData.lines && root.lyricsData.lines[1]) ? root.lyricsData.lines[1] : " "
+            color: Qt.darker(root.foreground, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+            wrapMode: Text.NoWrap
+          }
+
+          // Row 2: CURRENT SINGING LINE (Prominently Highlighted)
           BorderSurface {
             visible: root.lyricsData.hasLyrics
             width: parent.width
-            color: Util.alpha(root.accent, 0.12)
-            borderSpec: Border.flat(root.accent, Style.normalBorderWidth)
+            color: Util.alpha(root.accent, 0.14)
+            borderSpec: Border.flat(root.accent, Math.max(1, Style.normalBorderWidth))
             radius: Style.cornerRadius
-            padding: Style.space(10)
+            padding: Style.space(12)
 
             Text {
               anchors.centerIn: parent
-              width: parent.width - Style.space(12)
-              text: (root.lyricsData.lines && root.lyricsData.lines[1]) ? root.lyricsData.lines[1] : "♪ ♪ ♪"
+              width: parent.width - Style.space(16)
+              text: (root.lyricsData.lines && root.lyricsData.lines[2]) ? root.lyricsData.lines[2] : "♪ ♪ ♪"
               color: root.accent
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodyLarge
@@ -239,25 +252,25 @@ Item {
             }
           }
 
-          // Line 2: Upcoming Line 1
+          // Row 3: 1 line below
           Text {
             visible: root.lyricsData.hasLyrics
             width: parent.width
-            text: (root.lyricsData.lines && root.lyricsData.lines[2]) ? root.lyricsData.lines[2] : " "
+            text: (root.lyricsData.lines && root.lyricsData.lines[3]) ? root.lyricsData.lines[3] : " "
             color: Qt.darker(root.foreground, 1.4)
             font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Style.font.bodySmall
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
             wrapMode: Text.NoWrap
           }
 
-          // Line 3: Upcoming Line 2
+          // Row 4: 2 lines below
           Text {
             visible: root.lyricsData.hasLyrics
             width: parent.width
-            text: (root.lyricsData.lines && root.lyricsData.lines[3]) ? root.lyricsData.lines[3] : " "
-            color: Qt.darker(root.foreground, 1.8)
+            text: (root.lyricsData.lines && root.lyricsData.lines[4]) ? root.lyricsData.lines[4] : " "
+            color: Qt.darker(root.foreground, 1.9)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
@@ -270,8 +283,8 @@ Item {
             visible: !root.lyricsData.hasLyrics
             width: parent.width
             spacing: Style.space(8)
-            topPadding: Style.space(10)
-            bottomPadding: Style.space(10)
+            topPadding: Style.space(16)
+            bottomPadding: Style.space(16)
 
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
@@ -294,7 +307,7 @@ Item {
         // Footer Hint
         Item {
           width: parent.width
-          height: Style.space(14)
+          height: Style.space(16)
           Text {
             anchors.right: parent.right
             text: "Press Esc or click outside to dismiss"
