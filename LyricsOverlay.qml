@@ -39,6 +39,22 @@ Item {
     else root.open("{}")
   }
 
+  IpcHandler {
+    target: "susamn.mpd-lyrics"
+
+    function toggle(): void {
+      root.toggle()
+    }
+
+    function open(): void {
+      root.open("{}")
+    }
+
+    function close(): void {
+      root.close()
+    }
+  }
+
   function refreshLyrics() {
     if (lyricsProc.running) return
     lyricsProc.command = ["bash", root.pluginPath + "/scripts/lyrics.sh"]
