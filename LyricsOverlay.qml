@@ -109,7 +109,7 @@ Item {
     BorderSurface {
       id: card
       width: root.cardWidth
-      height: cardColumn.implicitHeight + card.contentTopInset + card.contentBottomInset + root.contentMargin * 2
+      height: cardColumn.implicitHeight + card.contentTopInset + card.contentBottomInset
       anchors.centerIn: parent
       color: root.background
       borderSpec: root.borderSpec

@@ -1,9 +1,5 @@
 #!/bin/bash
-# Emits current MPD track information and 4-line synced lyrics window as JSON.
-# Line 0: 1 line above (previous context)
-# Line 1: current singing line (highlighted)
-# Line 2: 1 line below (upcoming context)
-# Line 3: 2 lines below (upcoming context)
+export PATH="/home/linuxbrew/.linuxbrew/bin:$HOME/.local/bin:$HOME/workspace/tools/mpdtui:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 title=$(mpc current -f '%title%' 2>/dev/null)
 artist=$(mpc current -f '%artist%' 2>/dev/null)
@@ -15,6 +11,7 @@ if [ -z "$title" ]; then
 fi
 
 raw_lyrics=$(mpdtui -lyrics-line 2>/dev/null)
+
 l0=$(echo "$raw_lyrics" | sed -n '1p')
 l1=$(echo "$raw_lyrics" | sed -n '2p')
 l2=$(echo "$raw_lyrics" | sed -n '3p')
