@@ -32,10 +32,9 @@ Item {
   property int contentMargin: Style.space(20)
   property int cardWidth: Math.min(Style.space(720), panel.width - Style.gapsOut * 2)
 
-  // Exactly 5 visible rows: 1 above (Row 0), 1 active (Row 1), 3 upcoming (Rows 2, 3, 4)
-  // Compact line spacing
+  // Exactly 7 visible rows: 3 above (Rows 0-2), 1 active (Row 3, stationary center), 3 upcoming (Rows 4-6)
   property int rowHeight: Style.space(32)
-  readonly property int viewportHeight: rowHeight * 5
+  readonly property int viewportHeight: rowHeight * 7
 
   function open(payloadJson) {
     root.opened = true
@@ -107,7 +106,7 @@ Item {
       root.currentIndex = idx
 
       if ((indexChanged || forceScroll) && idx >= 0) {
-        lyricsList.contentY = (idx - 1) * root.rowHeight
+        lyricsList.contentY = (idx - 3) * root.rowHeight
       }
     }
   }
@@ -305,14 +304,14 @@ Item {
           foreground: root.foreground
         }
 
-        // Fixed 5-Row Viewport
+        // Fixed 7-Row Viewport
         Item {
           id: viewportContainer
           width: parent.width
           height: root.viewportHeight
           clip: true
 
-          // Scrollable 5-Row List
+          // Scrollable 7-Row List
           ListView {
             id: lyricsList
             anchors.fill: parent
@@ -321,22 +320,22 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             interactive: root.lyricsData.type === "plain"
 
-            // Header creates 1 blank row so Line 0 starts at Row 1 (preceded by 1 row above at Row 0)
+            // Header creates 3 blank rows so Line 0 starts at Row 3 (preceded by 3 rows above)
             header: Item {
               width: lyricsList.width
-              height: 1 * root.rowHeight
+              height: 3 * root.rowHeight
             }
 
-            // Footer creates 4 blank rows so the final line can reach Row 1 (followed by 3 rows below)
+            // Footer creates 3 blank rows so the final line can reach Row 3 (followed by 3 rows below)
             footer: Item {
               width: lyricsList.width
-              height: 4 * root.rowHeight
+              height: 3 * root.rowHeight
             }
 
             onCountChanged: {
               if (root.currentIndex >= 0 && root.lyricsData.type === "synced") {
                 Qt.callLater(function() {
-                  lyricsList.contentY = (root.currentIndex - 1) * root.rowHeight
+                  lyricsList.contentY = (root.currentIndex - 3) * root.rowHeight
                 })
               }
             }
@@ -359,20 +358,18 @@ Item {
               readonly property string lineText: isSynced ? (modelData.text || "") : String(modelData || "")
               readonly property string displayText: (lineText === "" && isSyncedActive) ? "♪ ♪ ♪" : lineText
 
-              // Symmetrical vignetted opacity:
-              // Past line (offset -1): 0.65
-              // Current active (offset 0): 1.0 (bold, bright accent)
-              // Upcoming 1 (offset +1): 0.65
-              // Upcoming 2 (offset +2): 0.40
-              // Upcoming 3 (offset +3): 0.20
-              // Outside: 0.0
+              // Symmetrical 7-row vignetted opacity curve:
+              // Offset  0 (Current active): 1.0 (bold, bright accent)
+              // Offset ±1 (1 line away):    0.65
+              // Offset ±2 (2 lines away):   0.40
+              // Offset ±3 (3 lines away):   0.20
+              // Outside:                    0.0
               readonly property real targetOpacity: {
                 if (!isSynced) return 0.85
                 if (isSyncedActive) return 1.0
-                if (offset === -1) return 0.65
-                if (offset === 1) return 0.65
-                if (offset === 2) return 0.40
-                if (offset === 3) return 0.20
+                if (offset === -1 || offset === 1) return 0.65
+                if (offset === -2 || offset === 2) return 0.40
+                if (offset === -3 || offset === 3) return 0.20
                 return 0.0
               }
 
@@ -387,7 +384,7 @@ Item {
                   text: lineDelegate.displayText
                   color: lineDelegate.isSyncedActive ? root.accent : root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: lineDelegate.isSyncedActive ? Style.font.heading : Style.font.body
+                  font.pixelSize: lineDelegate.isSyncedActive ? Style.font.heading : ((Math.abs(lineDelegate.offset) === 1) ? Style.font.body : Style.font.bodySmall)
                   font.bold: lineDelegate.isSyncedActive
                   horizontalAlignment: lineDelegate.isSynced ? Text.AlignHCenter : Text.AlignLeft
                   elide: Text.ElideRight
@@ -413,6 +410,7 @@ Item {
               }
             }
           }
+
 
 
           // Empty state: No lyrics found

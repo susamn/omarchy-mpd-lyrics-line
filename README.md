@@ -50,12 +50,12 @@ o.bind("SUPER SHIFT", "L", "MPD Synced Lyrics", "omarchy-shell susamn.mpd-lyrics
   - Automatically resolves `<track_name>.lrc` for real-time timestamp synchronization.
   - Falls back to `<track_name>.txt` for plain text lyrics if no `.lrc` is found.
   - Displays a clean empty state if neither file exists.
-- **Butter-Smooth Synced Scrolling (5-Row Window)**:
-  - **Row 0**: 1 preceding context line (dimmed).
-  - **Row 1**: Current line being sung (bold, bright accent color, prominent font size, stationary position).
-  - **Rows 2–4**: 3 upcoming context lines (gradually dimmed by distance).
+- **Butter-Smooth Synced Scrolling (7-Row Window)**:
+  - **Rows 0–2**: 3 preceding context lines (gradually vignetted: 0.20, 0.40, 0.65).
+  - **Row 3**: Current line being sung (bold, bright accent color, prominent font size, stationary center position).
+  - **Rows 4–6**: 3 upcoming context lines (gradually vignetted: 0.65, 0.40, 0.20).
   - Automatically glides lines upwards from bottom to top as song playback progresses.
-  - **Top/Bottom Edge Gradients**: Subtle masks create a smooth entrance and exit for scrolling text.
+
 
 - **Interactive Click-to-Seek**:
   - Click any line in synced lyrics mode to seek MPD playback directly to that timestamp.
