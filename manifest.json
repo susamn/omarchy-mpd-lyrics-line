@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "susamn.mpd-lyrics",
   "name": "MPD Lyrics",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Supratim Samanta",
   "license": "MIT",
-  "description": "Synced 4-line lyrics modal popup overlay for MPD.",
+  "description": "Butter-smooth synced and plain lyrics overlay for MPD.",
   "kinds": [
     "overlay"
   ],
@@ -14,3 +14,4 @@
     "overlay": "LyricsOverlay.qml"
   }
 }
+

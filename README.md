@@ -1,15 +1,13 @@
 # MPD Lyrics Overlay
 
-An Omarchy overlay plugin that presents real-time synced 4-line `.lrc` lyrics in a modal dialog matching Omarchy's package install / Polkit modal popup style.
+An Omarchy overlay plugin that presents real-time butter-smooth synced `.lrc` and plain `.txt` lyrics in a centered modal popup matching Omarchy's design language.
 
 ## Requirements
 
 | Dependency | Needed for | Notes |
 |---|---|---|
 | `mpd` | Music Player Daemon | Running background music playback service. |
-| `mpc` | Metadata & state queries | Standard lightweight client for MPD. |
-| `mpdtui` | Synced LRC window generator | Generates real-time 4-line lyrics windows via `mpdtui -lyrics-line`. |
-| `jq` | JSON serialization | Formats lyrics output into JSON for Quickshell. |
+| `python3` | Lyrics resolver | Queries MPD via raw TCP protocol and parses local `.lrc` / `.txt` files. |
 
 ## Install
 
@@ -48,15 +46,28 @@ o.bind("SUPER SHIFT", "L", "MPD Synced Lyrics", "omarchy-shell susamn.mpd-lyrics
 
 ## Features
 
-- **Centered Modal Popup**: Uses Omarchy's `PanelWindow` overlay with a translucent scrim backdrop (`WlrLayer.Overlay`).
-- **4-Line Synced Window**:
-  - **Line 0**: 1 line of preceding context (dimmed)
-  - **Line 1**: Current line being sung (bold, highlighted in accent color)
-  - **Line 2**: 1 line of upcoming context (dimmed)
-  - **Line 3**: 2 lines of upcoming context (dimmed)
-- **Fast Dynamic Polling**: Automatically refreshes every 500ms while visible and stops immediately when dismissed.
-- **Easy Dismissal**: Press `Esc` or click anywhere outside the modal card to close.
+- **Direct Same-Directory Lyrics Discovery**:
+  - Automatically resolves `<track_name>.lrc` for real-time timestamp synchronization.
+  - Falls back to `<track_name>.txt` for plain text lyrics if no `.lrc` is found.
+  - Displays a clean empty state if neither file exists.
+- **Butter-Smooth Synced Scrolling (5-Row Window)**:
+  - **Row 0**: 1 preceding context line (dimmed).
+  - **Row 1**: Current line being sung (bold, bright accent color, prominent font size, stationary position).
+  - **Rows 2–4**: 3 upcoming context lines (gradually dimmed by distance).
+  - Automatically glides lines upwards from bottom to top as song playback progresses.
+  - **Top/Bottom Edge Gradients**: Subtle masks create a smooth entrance and exit for scrolling text.
+
+- **Interactive Click-to-Seek**:
+  - Click any line in synced lyrics mode to seek MPD playback directly to that timestamp.
+- **Vim Navigation Support**:
+  - `j` / `k` or `Down` / `Up`: Scroll line-by-line.
+  - `Ctrl+d` / `d` & `Ctrl+u` / `u` or `PageDown` / `PageUp`: Half-page scroll.
+  - `gg` / `g`: Jump to top.
+  - `G`: Jump to bottom.
+- **Easy Dismissal**:
+  - Press `Esc`, `q`, or click anywhere outside the modal card to close.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+

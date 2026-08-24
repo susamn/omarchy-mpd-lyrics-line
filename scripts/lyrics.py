@@ -1,158 +1,220 @@
 #!/usr/bin/env python3
-import subprocess, os, re, glob, json, sys
+import os
+import re
+import json
+import sys
+import socket
 
-def normalize(s):
-    return re.sub(r'[^a-zA-Z0-9]', '', s).lower()
+MPD_HOST = os.environ.get('MPD_HOST', 'localhost')
+MPD_PORT = int(os.environ.get('MPD_PORT', '6600'))
 
-def get_mpd_info():
+
+def mpd_command(commands):
+    """Execute a list of commands against MPD over a raw socket."""
     try:
-        status_out = subprocess.check_output(['mpc', 'status'], text=True, stderr=subprocess.DEVNULL)
-    except Exception:
-        return None, 0.0, '', '', ''
+        with socket.create_connection((MPD_HOST, MPD_PORT), timeout=1) as sock:
+            f = sock.makefile('rwb')
+            greeting = f.readline()
+            if not greeting.startswith(b'OK MPD'):
+                return []
+            
+            if len(commands) == 1:
+                f.write(commands[0].encode('utf-8') + b'\n')
+            else:
+                f.write(b'command_list_begin\n')
+                for cmd in commands:
+                    f.write(cmd.encode('utf-8') + b'\n')
+                f.write(b'command_list_end\n')
+            f.flush()
 
-    state = 'stopped'
-    if '[playing]' in status_out:
-        state = 'playing'
-    elif '[paused]' in status_out:
-        state = 'paused'
-    else:
-        return 'stopped', 0.0, '', '', ''
+            lines = []
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                text = line.decode('utf-8', errors='ignore').rstrip('\r\n')
+                if text.startswith('OK') or text.startswith('ACK'):
+                    break
+                lines.append(text)
+            return lines
+    except OSError:
+        return []
 
-    # Get precise elapsed seconds
-    elapsed = 0.0
-    time_match = re.search(r'\[(?:playing|paused)\]\s+#\d+/\d+\s+(\d+):(\d+)(?::(\d+))?', status_out)
-    if time_match:
-        parts = [int(p) for p in time_match.groups() if p is not None]
-        if len(parts) == 3:
-            elapsed = float(parts[0] * 3600 + parts[1] * 60 + parts[2])
-        elif len(parts) == 2:
-            elapsed = float(parts[0] * 60 + parts[1])
 
-    try:
-        file_rel = subprocess.check_output(['mpc', 'current', '-f', '%file%'], text=True, stderr=subprocess.DEVNULL).strip()
-        title = subprocess.check_output(['mpc', 'current', '-f', '%title%'], text=True, stderr=subprocess.DEVNULL).strip()
-        artist = subprocess.check_output(['mpc', 'current', '-f', '%artist%'], text=True, stderr=subprocess.DEVNULL).strip()
-    except Exception:
-        file_rel, title, artist = '', '', ''
-
-    if not title and file_rel:
-        title = os.path.splitext(os.path.basename(file_rel))[0]
-
-    return state, elapsed, file_rel, title, artist
-
-def parse_lrc(filepath):
-    lines = []
-    tag_re = re.compile(r'\[(\d+):(\d+(?:\.\d+)?)\]')
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                tags = tag_re.findall(line)
-                if not tags:
-                    continue
-                text = tag_re.sub('', line).strip()
-                for mm, ss in tags:
-                    t = float(mm) * 60.0 + float(ss)
-                    lines.append((t, text))
-    except Exception:
-        pass
-    lines.sort(key=lambda x: x[0])
-    return lines
-
-def find_lrc(file_rel):
-    if not file_rel:
-        return None
-
-    music_dirs = [
-        os.path.expanduser('~/Music'),
-        os.path.expanduser('~/Music/music-metadata/lyrics'),
-        os.path.expanduser('~/Music/susamn-music-collection')
-    ]
+def get_music_dir():
+    """Retrieve music directory from mpd.conf or fallback to standard path."""
     mpd_conf = os.path.expanduser('~/.config/mpd/mpd.conf')
     if os.path.isfile(mpd_conf):
         try:
-            with open(mpd_conf, 'r') as f:
+            with open(mpd_conf, 'r', encoding='utf-8') as f:
                 for line in f:
-                    if line.strip().startswith('music_directory'):
-                        m = re.search(r'\"([^\"]+)\"', line)
+                    line_str = line.strip()
+                    if line_str.startswith('music_directory'):
+                        m = re.search(r'\"([^\"]+)\"', line_str)
                         if m:
-                            music_dirs.insert(0, os.path.expanduser(m.group(1)))
+                            return os.path.expanduser(m.group(1))
         except Exception:
             pass
+    
+    fallback = os.path.expanduser('~/Music/susamn-music-collection')
+    if os.path.isdir(fallback):
+        return fallback
+    return os.path.expanduser('~/Music')
 
-    base_dir = os.path.dirname(file_rel)
-    base_name = os.path.splitext(os.path.basename(file_rel))[0]
-    norm_target = normalize(base_name)
 
-    for mdir in music_dirs:
-        target_dir = os.path.join(mdir, base_dir)
-        if os.path.isdir(target_dir):
-            for f in os.listdir(target_dir):
-                if f.lower().endswith('.lrc'):
-                    if normalize(os.path.splitext(f)[0]) == norm_target:
-                        return os.path.join(target_dir, f)
-        if os.path.isdir(mdir):
-            for f in os.listdir(mdir):
-                if f.lower().endswith('.lrc'):
-                    if normalize(os.path.splitext(f)[0]) == norm_target:
-                        return os.path.join(mdir, f)
-    return None
+def get_mpd_info():
+    """Query current MPD status and current song."""
+    raw_lines = mpd_command(['status', 'currentsong'])
+    fields = {}
+    for line in raw_lines:
+        key, sep, value = line.partition(':')
+        if sep:
+            fields[key.strip()] = value.strip()
 
-def fallback_mpdtui():
-    env = os.environ.copy()
-    env["PATH"] = f"/home/linuxbrew/.linuxbrew/bin:{os.path.expanduser('~/.local/bin')}:{os.path.expanduser('~/workspace/tools/mpdtui')}:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
+    state = fields.get('state', 'stop')
+    if state not in ('play', 'pause'):
+        return 'stopped', 0.0, 0.0, '', '', ''
+
     try:
-        out = subprocess.check_output(['mpdtui', '-lyrics-line'], text=True, stderr=subprocess.DEVNULL, env=env)
-        raw = out.splitlines()
-        while len(raw) < 4:
-            raw.append('')
-        return ["", raw[0], raw[1], raw[2], raw[3]]
+        elapsed = float(fields.get('elapsed', 0.0) or 0.0)
+    except ValueError:
+        elapsed = 0.0
+
+    try:
+        duration = float(fields.get('duration', 0.0) or 0.0)
+    except ValueError:
+        duration = 0.0
+
+    file_rel = fields.get('file', '')
+    title = fields.get('Title', '')
+    artist = fields.get('Artist', '')
+    if not title and file_rel:
+        title = os.path.splitext(os.path.basename(file_rel))[0]
+
+    return ('playing' if state == 'play' else 'paused'), elapsed, duration, file_rel, title, artist
+
+
+def parse_lrc(filepath):
+    """Parse .lrc file into sorted [{ 'time': float, 'text': str }] array."""
+    lines = []
+    tag_re = re.compile(r'\[(\d+):(\d+(?:\.\d+)?)\]')
+    offset_re = re.compile(r'\[offset:\s*([+-]?\d+)\]', re.IGNORECASE)
+    offset_ms = 0.0
+
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                
+                # Check for global offset tag [offset:+/-ms]
+                offset_match = offset_re.match(line)
+                if offset_match:
+                    try:
+                        offset_ms = float(offset_match.group(1))
+                    except ValueError:
+                        pass
+                    continue
+
+                tags = tag_re.findall(line)
+                if not tags:
+                    continue
+
+                text = tag_re.sub('', line).strip()
+                for mm, ss in tags:
+                    try:
+                        t = float(mm) * 60.0 + float(ss) + (offset_ms / 1000.0)
+                        if t < 0:
+                            t = 0.0
+                        lines.append({'time': round(t, 2), 'text': text})
+                    except ValueError:
+                        continue
     except Exception:
-        return ["", "", "", "", ""]
+        return []
 
-state, elapsed, file_rel, title, artist = get_mpd_info()
+    lines.sort(key=lambda x: x['time'])
+    return lines
 
-if not state or state == 'stopped' or not title:
+
+def parse_txt(filepath):
+    """Parse .txt file into a list of line strings."""
+    lines = []
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            for raw_line in f:
+                lines.append(raw_line.rstrip('\r\n'))
+    except Exception:
+        return []
+    return lines
+
+
+def resolve_lyrics(file_rel, music_dir):
+    """Check for same-name .lrc or .txt in the song directory."""
+    if not file_rel:
+        return 'none', []
+
+    full_path = os.path.join(music_dir, file_rel)
+    stem, _ = os.path.splitext(full_path)
+
+    lrc_path = stem + '.lrc'
+    if os.path.isfile(lrc_path):
+        lrc_lines = parse_lrc(lrc_path)
+        if lrc_lines:
+            return 'synced', lrc_lines
+
+    txt_path = stem + '.txt'
+    if os.path.isfile(txt_path):
+        txt_lines = parse_txt(txt_path)
+        if txt_lines:
+            return 'plain', txt_lines
+
+    return 'none', []
+
+
+def handle_seek(target_sec):
+    """Seek current song to target_sec."""
+    try:
+        sec = float(target_sec)
+        mpd_command([f'seekcur {sec}'])
+    except ValueError:
+        pass
+
+
+def main():
+    if len(sys.argv) > 2 and sys.argv[1] == 'seek':
+        handle_seek(sys.argv[2])
+        sys.exit(0)
+
+    state, elapsed, duration, file_rel, title, artist = get_mpd_info()
+
+    if state == 'stopped' or not file_rel:
+        print(json.dumps({
+            'state': 'stopped',
+            'title': title or '',
+            'artist': artist or '',
+            'type': 'none',
+            'elapsed': 0.0,
+            'duration': 0.0,
+            'lines': []
+        }))
+        sys.exit(0)
+
+    music_dir = get_music_dir()
+    lyrics_type, lines = resolve_lyrics(file_rel, music_dir)
+
     print(json.dumps({
-        'state': 'stopped',
-        'title': '',
-        'artist': '',
-        'lines': ['', '', '', '', ''],
-        'hasLyrics': False
-    }))
-    sys.exit(0)
+        'state': state,
+        'title': title,
+        'artist': artist,
+        'file': file_rel,
+        'type': lyrics_type,
+        'elapsed': elapsed,
+        'duration': duration,
+        'lines': lines
+    }, ensure_ascii=False))
 
-lrc_path = find_lrc(file_rel)
-window = ['', '', '', '', '']
-has_lyrics = False
 
-if lrc_path:
-    parsed_lines = parse_lrc(lrc_path)
-    if parsed_lines:
-        idx = -1
-        for i, (t, txt) in enumerate(parsed_lines):
-            if t <= elapsed:
-                idx = i
-            else:
-                break
-        
-        # Build 5-line window: [idx-2, idx-1, idx, idx+1, idx+2]
-        for slot, offset in enumerate([-2, -1, 0, 1, 2]):
-            target_idx = idx + offset
-            if 0 <= target_idx < len(parsed_lines):
-                window[slot] = parsed_lines[target_idx][1]
-            else:
-                window[slot] = ''
-        
-        has_lyrics = True
+if __name__ == '__main__':
+    main()
 
-if not has_lyrics:
-    window = fallback_mpdtui()
-    has_lyrics = any(line != '' for line in window)
-
-print(json.dumps({
-    'state': state,
-    'title': title,
-    'artist': artist,
-    'lines': window,
-    'hasLyrics': has_lyrics
-}))
