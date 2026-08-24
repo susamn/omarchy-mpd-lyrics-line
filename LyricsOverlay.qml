@@ -148,7 +148,7 @@ Item {
     color: "transparent"
     WlrLayershell.namespace: "omarchy-mpd-lyrics"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
     exclusionMode: ExclusionMode.Ignore
 
     Rectangle {
@@ -170,11 +170,6 @@ Item {
       borderSpec: root.borderSpec
       padding: root.contentMargin
       radius: root.cornerRadius
-
-      MouseArea {
-        anchors.fill: parent
-        onClicked: {} // Prevent dismiss when clicking inside card
-      }
 
       Item {
         id: keyCatcher
@@ -392,20 +387,17 @@ Item {
                   text: lineDelegate.displayText
                   color: lineDelegate.isSyncedActive ? root.accent : root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: lineDelegate.isSyncedActive ? Style.font.heading : ((lineDelegate.offset === 1 || lineDelegate.offset === -1) ? Style.font.body : Style.font.bodySmall)
+                  font.pixelSize: lineDelegate.isSyncedActive ? Style.font.heading : Style.font.body
                   font.bold: lineDelegate.isSyncedActive
                   horizontalAlignment: lineDelegate.isSynced ? Text.AlignHCenter : Text.AlignLeft
                   elide: Text.ElideRight
                   opacity: lineDelegate.targetOpacity
 
                   Behavior on opacity {
-                    NumberAnimation { duration: 300; easing.type: Easing.OutQuad }
+                    NumberAnimation { duration: 320; easing.type: Easing.OutQuad }
                   }
                   Behavior on color {
                     ColorAnimation { duration: 250 }
-                  }
-                  Behavior on font.pixelSize {
-                    NumberAnimation { duration: 250; easing.type: Easing.OutQuad }
                   }
                 }
               }
@@ -421,6 +413,7 @@ Item {
               }
             }
           }
+
 
           // Empty state: No lyrics found
           Column {
