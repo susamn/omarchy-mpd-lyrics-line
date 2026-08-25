@@ -19,6 +19,11 @@ An Omarchy overlay plugin that presents real-time butter-smooth synced `.lrc` an
 | `mpd` | Music Player Daemon | Running background music playback service. |
 | `python3` | Lyrics resolver | Queries MPD via raw TCP protocol and parses local `.lrc` / `.txt` files. |
 
+> [!IMPORTANT]
+> **Lyrics file naming is strict.** The lyrics file must sit in the same directory as the track and have the exact same filename (only the extension differs), as either `.lrc` (synced) or `.txt` (plain).
+>
+> Example: `Sweet Child O Mine.mp3` needs `Sweet Child O Mine.lrc` (or `.txt`) next to it. No fuzzy matching, no separate lyrics directory — if the name doesn't match exactly, no lyrics are shown.
+
 ## Install
 
 ```bash
