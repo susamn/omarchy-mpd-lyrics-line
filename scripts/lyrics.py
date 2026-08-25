@@ -181,9 +181,54 @@ def handle_seek(target_sec):
         pass
 
 
+def watch_idle():
+    """Block on MPD's 'idle player' in a loop over one persistent connection,
+    printing a flushed marker line each time playback state changes (seek,
+    play, pause, track change). Exits quietly if MPD is unreachable or the
+    connection drops (e.g. MPD restarts)."""
+    try:
+        sock = socket.create_connection((MPD_HOST, MPD_PORT), timeout=3)
+    except OSError:
+        return
+
+    try:
+        f = sock.makefile('rwb')
+        greeting = f.readline()
+        if not greeting.startswith(b'OK MPD'):
+            return
+
+        sock.settimeout(None)  # idle blocks indefinitely between events
+
+        while True:
+            f.write(b'idle player\n')
+            f.flush()
+
+            changed = False
+            while True:
+                line = f.readline()
+                if not line:
+                    return
+                text = line.decode('utf-8', errors='ignore').rstrip('\r\n')
+                if text.startswith('OK') or text.startswith('ACK'):
+                    break
+                if text.startswith('changed:'):
+                    changed = True
+
+            if changed:
+                print('changed', flush=True)
+    except OSError:
+        return
+    finally:
+        sock.close()
+
+
 def main():
     if len(sys.argv) > 2 and sys.argv[1] == 'seek':
         handle_seek(sys.argv[2])
+        sys.exit(0)
+
+    if len(sys.argv) > 1 and sys.argv[1] == 'idle':
+        watch_idle()
         sys.exit(0)
 
     state, elapsed, duration, file_rel, title, artist = get_mpd_info()

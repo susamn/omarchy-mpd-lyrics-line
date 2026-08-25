@@ -30,7 +30,7 @@ Item {
   property color scrim: Color.polkit.scrim
   readonly property int cornerRadius: Style.cornerRadius
   property int contentMargin: Style.space(20)
-  property int cardWidth: Math.min(Style.space(720), panel.width - Style.gapsOut * 2)
+  property int cardWidth: panel.width > 0 ? Math.min(Style.space(720), panel.width - Style.gapsOut * 2) : Style.space(720)
 
   // Exactly 7 visible rows: 3 above (Rows 0-2), 1 active (Row 3, stationary center), 3 upcoming (Rows 4-6)
   property int rowHeight: Style.space(32)
@@ -40,12 +40,17 @@ Item {
     root.opened = true
     root.refreshLyrics()
     lyricsTimer.restart()
+    idleWatcherRetry.stop()
+    idleWatcher.command = ["bash", root.pluginPath + "/scripts/lyrics.sh", "idle"]
+    idleWatcher.running = true
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function close() {
     root.opened = false
     lyricsTimer.stop()
+    idleWatcher.running = false
+    idleWatcherRetry.stop()
   }
 
   function toggle() {
@@ -105,7 +110,7 @@ Item {
       var indexChanged = (idx !== root.currentIndex)
       root.currentIndex = idx
 
-      if ((indexChanged || forceScroll) && idx >= 0) {
+      if (indexChanged || forceScroll) {
         lyricsList.contentY = (idx - 3) * root.rowHeight
       }
     }
@@ -137,6 +142,30 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyLyrics(text)
+    }
+  }
+
+  // Persistent MPD "idle player" listener: pushes an immediate refresh on
+  // seek/play/pause/track-change instead of waiting for the next poll tick.
+  Process {
+    id: idleWatcher
+    stdout: SplitParser {
+      onRead: data => root.refreshLyrics()
+    }
+    onExited: {
+      if (root.opened) idleWatcherRetry.restart()
+    }
+  }
+
+  Timer {
+    id: idleWatcherRetry
+    interval: 3000
+    repeat: false
+    onTriggered: {
+      if (root.opened) {
+        idleWatcher.command = ["bash", root.pluginPath + "/scripts/lyrics.sh", "idle"]
+        idleWatcher.running = true
+      }
     }
   }
 
@@ -333,7 +362,7 @@ Item {
             }
 
             onCountChanged: {
-              if (root.currentIndex >= 0 && root.lyricsData.type === "synced") {
+              if (root.lyricsData.type === "synced") {
                 Qt.callLater(function() {
                   lyricsList.contentY = (root.currentIndex - 3) * root.rowHeight
                 })
@@ -453,11 +482,13 @@ Item {
         }
 
         // Footer Navigation Hint
-        Row {
+        Item {
           width: parent.width
-          spacing: Style.space(8)
+          height: Math.max(hintText.implicitHeight, dismissText.implicitHeight)
 
           Text {
+            id: hintText
+            anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: root.lyricsData.type === "synced" ? "Click line to seek" : (root.lyricsData.type === "plain" ? "Vim: j/k to scroll, d/u half page, gg/G top/bottom" : "")
             color: Qt.darker(root.foreground, 1.6)
@@ -465,12 +496,9 @@ Item {
             font.pixelSize: Style.font.caption
           }
 
-          Item {
-            width: parent.width - parent.childrenRect.width - Style.space(16)
-            height: 1
-          }
-
           Text {
+            id: dismissText
+            anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             text: "Esc or q to dismiss"
             color: Qt.darker(root.foreground, 1.8)
