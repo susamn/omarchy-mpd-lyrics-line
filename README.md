@@ -2,6 +2,16 @@
 
 An Omarchy overlay plugin that presents real-time butter-smooth synced `.lrc` and plain `.txt` lyrics in a centered modal popup matching Omarchy's design language.
 
+## Demo
+
+<video src="assets/demo.mp4" controls width="720"></video>
+
+## Screenshots
+
+| In context | Modal close-up |
+|---|---|
+| ![Lyrics overlay over the desktop](assets/screenshot-desktop.png) | ![Lyrics overlay modal close-up](assets/screenshot-modal.png) |
+
 ## Requirements
 
 | Dependency | Needed for | Notes |
