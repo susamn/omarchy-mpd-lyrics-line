@@ -21,6 +21,8 @@ Item {
     lines: []
   })
   property int currentIndex: -1
+  property real lineProgress: 0.0
+  property double lastSyncTimestamp: 0
 
   property string fontFamily: Style.font.family
   property color background: Color.menu.background
@@ -38,6 +40,7 @@ Item {
 
   function open(payloadJson) {
     root.opened = true
+    root.lastSyncTimestamp = Date.now()
     root.refreshLyrics()
     lyricsTimer.restart()
     idleWatcherRetry.stop()
@@ -78,7 +81,8 @@ Item {
     Quickshell.execDetached(["bash", root.pluginPath + "/scripts/lyrics.sh", "seek", String(targetSec)])
     if (root.lyricsData && root.lyricsData.type === "synced") {
       root.lyricsData.elapsed = targetSec
-      root.updateCurrentIndex(true)
+      root.lastSyncTimestamp = Date.now()
+      root.updateProgress(true)
     }
   }
 
@@ -88,32 +92,74 @@ Item {
     lyricsProc.running = true
   }
 
-  function updateCurrentIndex(forceScroll) {
+  function updateProgress(forceScroll) {
     if (!root.lyricsData || !root.lyricsData.lines || root.lyricsData.lines.length === 0) {
       root.currentIndex = -1
+      root.lineProgress = 0.0
       return
     }
 
-    if (root.lyricsData.type === "synced") {
-      var elapsed = Number(root.lyricsData.elapsed || 0)
-      var lines = root.lyricsData.lines
-      var idx = -1
+    if (root.lyricsData.type !== "synced") {
+      root.currentIndex = -1
+      root.lineProgress = 0.0
+      return
+    }
 
-      for (var i = 0; i < lines.length; i++) {
-        if (lines[i].time <= elapsed) {
-          idx = i
-        } else {
-          break
-        }
-      }
+    var baseElapsed = Number(root.lyricsData.elapsed || 0)
+    var elapsed = baseElapsed
+    if (root.lyricsData.state === "playing" && root.lastSyncTimestamp > 0) {
+      var delta = (Date.now() - root.lastSyncTimestamp) / 1000.0
+      elapsed = baseElapsed + Math.max(0.0, delta)
+    }
 
-      var indexChanged = (idx !== root.currentIndex)
-      root.currentIndex = idx
+    var lines = root.lyricsData.lines
+    var idx = -1
 
-      if (indexChanged || forceScroll) {
-        lyricsList.contentY = (idx - 3) * root.rowHeight
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].time <= elapsed) {
+        idx = i
+      } else {
+        break
       }
     }
+
+    var indexChanged = (idx !== root.currentIndex)
+    root.currentIndex = idx
+
+    if (indexChanged || forceScroll) {
+      lyricsList.contentY = (idx - 3) * root.rowHeight
+    }
+
+    if (idx < 0) {
+      root.lineProgress = 0.0
+      return
+    }
+
+    var lineStart = lines[idx].time
+    var lineEnd = -1
+    for (var j = idx + 1; j < lines.length; j++) {
+      if (lines[j].time > lineStart) {
+        lineEnd = lines[j].time
+        break
+      }
+    }
+
+    if (lineEnd <= lineStart) {
+      var dur = Number(root.lyricsData.duration || 0)
+      lineEnd = (dur > lineStart) ? dur : (lineStart + 4.0)
+    }
+
+    var lineDuration = lineEnd - lineStart
+    if (lineDuration > 0) {
+      var progress = (elapsed - lineStart) / lineDuration
+      root.lineProgress = Math.max(0.0, Math.min(1.0, progress))
+    } else {
+      root.lineProgress = 0.0
+    }
+  }
+
+  function updateCurrentIndex(forceScroll) {
+    root.updateProgress(forceScroll)
   }
 
   function applyLyrics(text) {
@@ -122,7 +168,8 @@ Item {
       if (parsed) {
         var fileChanged = (!root.lyricsData || parsed.file !== root.lyricsData.file)
         root.lyricsData = parsed
-        root.updateCurrentIndex(fileChanged)
+        root.lastSyncTimestamp = Date.now()
+        root.updateProgress(fileChanged)
       }
     } catch (e) {
       console.warn("Error parsing lyrics JSON:", e)
@@ -135,6 +182,14 @@ Item {
     repeat: true
     running: root.opened
     onTriggered: root.refreshLyrics()
+  }
+
+  Timer {
+    id: progressTimer
+    interval: 20
+    repeat: true
+    running: root.opened && root.lyricsData && root.lyricsData.state === "playing" && root.lyricsData.type === "synced"
+    onTriggered: root.updateProgress(false)
   }
 
   Process {
@@ -406,12 +461,36 @@ Item {
                 id: lineContent
                 anchors.centerIn: parent
                 width: parent.width - Style.space(24)
+                height: parent.height
+
+                // Active line word background fill (sweeps along with progress)
+                Item {
+                  id: wordBgCapsule
+                  visible: lineDelegate.isSyncedActive && lineTextItem.contentWidth > 0
+                  anchors.centerIn: parent
+                  width: Math.min(parent.width, lineTextItem.contentWidth + Style.space(16))
+                  height: Math.min(parent.height - Style.space(2), lineTextItem.contentHeight + Style.space(6))
+                  clip: true
+
+                  // Sweeping background fill contrasting against text
+                  Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: Math.max(0, Math.min(parent.width, parent.width * root.lineProgress))
+                    radius: Style.space(6)
+                    color: Util.alpha(root.accent, 0.28)
+                    border.color: Util.alpha(root.accent, 0.65)
+                    border.width: 1
+                  }
+                }
 
                 Text {
+                  id: lineTextItem
                   anchors.centerIn: parent
                   width: parent.width
                   text: lineDelegate.displayText
-                  color: lineDelegate.isSyncedActive ? root.accent : root.foreground
+                  color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: lineDelegate.isSyncedActive ? Style.font.heading : ((Math.abs(lineDelegate.offset) === 1) ? Style.font.body : Style.font.bodySmall)
                   font.bold: lineDelegate.isSyncedActive

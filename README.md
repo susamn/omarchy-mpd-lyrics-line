@@ -70,8 +70,8 @@ o.bind("SUPER SHIFT", "L", "MPD Synced Lyrics", "omarchy-shell susamn.mpd-lyrics
   - **Row 3**: Current line being sung (bold, bright accent color, prominent font size, stationary center position).
   - **Rows 4–6**: 3 upcoming context lines (gradually vignetted: 0.65, 0.40, 0.20).
   - Automatically glides lines upwards from bottom to top as song playback progresses.
-
-
+- **Word-Contoured Active Line Duration Highlight**:
+  - A subtle theme-contrasting background highlight smoothly sweeps from left to right behind the active line's words as it plays, providing an organic timing cue for when the next line begins without distracting full-dialog animations.
 - **Interactive Click-to-Seek**:
   - Click any line in synced lyrics mode to seek MPD playback directly to that timestamp.
 - **Vim Navigation Support**:
