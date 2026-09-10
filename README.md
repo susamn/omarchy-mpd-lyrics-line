@@ -67,11 +67,13 @@ o.bind("SUPER SHIFT", "L", "MPD Synced Lyrics", "omarchy-shell susamn.mpd-lyrics
   - Displays a clean empty state if neither file exists.
 - **Butter-Smooth Synced Scrolling (7-Row Window)**:
   - **Rows 0–2**: 3 preceding context lines (gradually vignetted: 0.20, 0.40, 0.65).
-  - **Row 3**: Current line being sung (bold, bright accent color, prominent font size, stationary center position).
+  - **Row 3**: Current line being sung (bold, full-opacity foreground text over an accent duration fill, prominent font size, stationary center position).
   - **Rows 4–6**: 3 upcoming context lines (gradually vignetted: 0.65, 0.40, 0.20).
   - Automatically glides lines upwards from bottom to top as song playback progresses.
-
-
+- **Active Line Duration Sweep**:
+  - A subtle accent-tinted fill sweeps left to right behind the active line as it plays, sized to that line's text extent rather than the full dialog width. It is a line-level timing cue for when the next line begins — not per-word karaoke timing, which plain `.lrc` does not carry.
+  - The sweep is driven by a local playback clock advanced from the compositor's own frame deltas, so it stays smooth between MPD polls and never steps backwards on subprocess latency.
+  - **Zero-Overhead Toggle**: Press `p` or click the stopwatch icon (`󰔛`) in the header to toggle the sweep on or off. When disabled, the active line displays with bold accent text, `FrameAnimation` halts, delegates unmount the highlight element via `Loader`, and the engine switches to a single-shot timer that sleeps entirely between lines (zero frame processing, zero VSync callbacks, zero RAM/GPU overhead).
 - **Interactive Click-to-Seek**:
   - Click any line in synced lyrics mode to seek MPD playback directly to that timestamp.
 - **Vim Navigation Support**:
