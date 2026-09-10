@@ -626,27 +626,25 @@ Item {
                 width: parent.width - Style.space(24)
                 height: parent.height
 
-                // Active line word background fill (sweeps along with progress).
-                // Uses Loader so that when turned off, no Item/Rectangle is created,
-                // zero bindings evaluate, and zero CPU/RAM is consumed.
-                Loader {
-                  id: wordBgLoader
-                  active: root.showDurationSweep && lineDelegate.isSyncedActive && lineTextItem.contentWidth > 0
-                  visible: active
+                // Active line word background fill (sweeps along with progress)
+                Item {
+                  id: wordBgCapsule
+                  visible: root.showDurationSweep && lineDelegate.isSyncedActive && lineTextItem.contentWidth > 0
                   anchors.centerIn: parent
                   width: Math.min(parent.width, lineTextItem.contentWidth + Style.space(16))
                   height: Math.min(parent.height - Style.space(2), lineTextItem.contentHeight + Style.space(6))
-                  sourceComponent: Component {
-                    Rectangle {
-                      anchors.left: parent.left
-                      anchors.top: parent.top
-                      anchors.bottom: parent.bottom
-                      width: Math.max(0, Math.min(parent.width, parent.width * root.lineProgress))
-                      radius: Style.space(6)
-                      color: Util.alpha(root.accent, 0.28)
-                      border.color: Util.alpha(root.accent, 0.65)
-                      border.width: 1
-                    }
+                  clip: true
+
+                  // Sweeping background fill contrasting against text
+                  Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: Math.max(0, Math.min(parent.width, parent.width * root.lineProgress))
+                    radius: Style.space(6)
+                    color: Util.alpha(root.accent, 0.28)
+                    border.color: Util.alpha(root.accent, 0.65)
+                    border.width: 1
                   }
                 }
 
