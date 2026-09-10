@@ -23,9 +23,52 @@ Item {
   property var currentLines: []
   property int currentIndex: -1
   property real lineProgress: 0.0
-  property double currentElapsed: 0.0
-  property double baseElapsed: 0.0
-  property double lastSyncTimestamp: 0.0
+  property bool showDurationSweep: true
+
+  function toggleDurationSweep() {
+    root.showDurationSweep = !root.showDurationSweep
+    if (root.showDurationSweep) {
+      lineAdvanceTimer.stop()
+      root.updateProgress(false)
+    } else {
+      root.lineProgress = 0.0
+      root.scheduleNextLineTimer()
+    }
+  }
+
+  function scheduleNextLineTimer() {
+    if (root.showDurationSweep) {
+      lineAdvanceTimer.stop()
+      return
+    }
+    if (!root.opened || !root.lyricsData || root.lyricsData.state !== "playing" || root.lyricsData.type !== "synced") {
+      lineAdvanceTimer.stop()
+      return
+    }
+    var remaining = root.activeLineEnd - root.currentElapsed
+    if (remaining > 0) {
+      lineAdvanceTimer.interval = Math.max(20, Math.round(remaining * 1000))
+      lineAdvanceTimer.restart()
+    } else {
+      lineAdvanceTimer.stop()
+    }
+  }
+
+  // Local playback clock, advanced by the render loop's own frame deltas. This is
+  // strictly monotonic, unlike Date.now(), which NTP or DST can step backwards.
+  property real currentElapsed: 0.0
+  // Bounds of the active line, recomputed only when currentIndex actually moves.
+  property real activeLineStart: 0.0
+  property real activeLineEnd: 0.0
+  // An idle-watcher push that arrived while a poll was in flight.
+  property bool refreshPending: false
+
+  // A poll whose elapsed differs from the local clock by more than this is a real
+  // external seek; smaller positive gaps are just latency catch-up.
+  readonly property real resyncThresholdSec: 1.2
+  readonly property real catchUpThresholdSec: 0.1
+  // Keeps a compositor stall from being swallowed whole by a single frame step.
+  readonly property real maxFrameStepSec: 0.25
 
   property string fontFamily: Style.font.family
   property color background: Color.menu.background
@@ -48,12 +91,14 @@ Item {
     idleWatcherRetry.stop()
     idleWatcher.command = ["bash", root.pluginPath + "/scripts/lyrics.sh", "idle"]
     idleWatcher.running = true
+    if (!root.showDurationSweep) root.scheduleNextLineTimer()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function close() {
     root.opened = false
     lyricsTimer.stop()
+    lineAdvanceTimer.stop()
     idleWatcher.running = false
     idleWatcherRetry.stop()
   }
@@ -77,54 +122,85 @@ Item {
     function close(): void {
       root.close()
     }
+
+    function toggleSweep(): void {
+      root.toggleDurationSweep()
+    }
   }
 
   function seekTo(targetSec) {
     Quickshell.execDetached(["bash", root.pluginPath + "/scripts/lyrics.sh", "seek", String(targetSec)])
     if (root.lyricsData && root.lyricsData.type === "synced") {
-      root.baseElapsed = targetSec
       root.currentElapsed = targetSec
-      root.lastSyncTimestamp = (root.lyricsData.state === "playing") ? Date.now() : 0
+      // MPD applies the seek asynchronously. Polls already in flight still report
+      // the pre-seek position; without this guard they read as an external seek
+      // and snap the highlight backwards until the real seek lands.
+      seekGuard.restart()
       root.updateProgress(true)
+      root.scheduleNextLineTimer()
     }
   }
 
   function refreshLyrics() {
-    if (lyricsProc.running) return
+    if (lyricsProc.running) {
+      // Remember the request instead of dropping it: an idle-watcher push that
+      // lands mid-poll would otherwise wait for the next fallback tick.
+      root.refreshPending = true
+      return
+    }
+    root.refreshPending = false
     lyricsProc.command = ["bash", root.pluginPath + "/scripts/lyrics.sh"]
     lyricsProc.running = true
   }
 
+  function updateActiveLineBounds(idx) {
+    var lines = root.currentLines
+    if (idx < 0 || !lines || idx >= lines.length) {
+      root.activeLineStart = 0.0
+      root.activeLineEnd = 0.0
+      return
+    }
+
+    var start = lines[idx].time
+    var end = -1
+    for (var j = idx + 1; j < lines.length; j++) {
+      if (lines[j].time > start) {
+        end = lines[j].time
+        break
+      }
+    }
+
+    if (end <= start) {
+      var dur = Number((root.lyricsData && root.lyricsData.duration) || 0)
+      end = (dur > start) ? dur : (start + 4.0)
+    }
+
+    root.activeLineStart = start
+    root.activeLineEnd = end
+  }
+
   function updateProgress(forceScroll) {
     var lines = root.currentLines
-    if (!lines || lines.length === 0) {
+    if (!lines || lines.length === 0 || !root.lyricsData || root.lyricsData.type !== "synced") {
       root.currentIndex = -1
       root.lineProgress = 0.0
       return
-    }
-
-    if (!root.lyricsData || root.lyricsData.type !== "synced") {
-      root.currentIndex = -1
-      root.lineProgress = 0.0
-      return
-    }
-
-    if (root.lyricsData.state === "playing" && root.lastSyncTimestamp > 0) {
-      var delta = (Date.now() - root.lastSyncTimestamp) / 1000.0
-      var estElapsed = root.baseElapsed + Math.max(0.0, delta)
-      root.currentElapsed = Math.max(root.currentElapsed, estElapsed)
-    } else {
-      root.currentElapsed = root.baseElapsed
     }
 
     var elapsed = root.currentElapsed
-    var idx = -1
+    var idx = root.currentIndex
 
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].time <= elapsed) {
-        idx = i
-      } else {
-        break
+    // Fast path: between frames the clock only creeps forward, so the cached index
+    // is almost always still correct. Only rescan when it demonstrably is not.
+    if (idx < 0 || idx >= lines.length || lines[idx].time > elapsed
+        || (idx + 1 < lines.length && lines[idx + 1].time <= elapsed)) {
+      idx = -1
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].time <= elapsed) {
+          idx = i
+        } else {
+          break
+        }
       }
     }
 
@@ -133,6 +209,7 @@ Item {
 
     if (indexChanged || forceScroll) {
       lyricsList.contentY = (idx - 3) * root.rowHeight
+      root.updateActiveLineBounds(idx)
     }
 
     if (idx < 0) {
@@ -140,31 +217,13 @@ Item {
       return
     }
 
-    var lineStart = lines[idx].time
-    var lineEnd = -1
-    for (var j = idx + 1; j < lines.length; j++) {
-      if (lines[j].time > lineStart) {
-        lineEnd = lines[j].time
-        break
-      }
-    }
-
-    if (lineEnd <= lineStart) {
-      var dur = Number(root.lyricsData.duration || 0)
-      lineEnd = (dur > lineStart) ? dur : (lineStart + 4.0)
-    }
-
-    var lineDuration = lineEnd - lineStart
-    if (lineDuration > 0) {
-      var progress = (elapsed - lineStart) / lineDuration
+    var lineDuration = root.activeLineEnd - root.activeLineStart
+    if (root.showDurationSweep && lineDuration > 0) {
+      var progress = (elapsed - root.activeLineStart) / lineDuration
       root.lineProgress = Math.max(0.0, Math.min(1.0, progress))
     } else {
       root.lineProgress = 0.0
     }
-  }
-
-  function updateCurrentIndex(forceScroll) {
-    root.updateProgress(forceScroll)
   }
 
   function applyLyrics(text) {
@@ -172,54 +231,54 @@ Item {
       var parsed = JSON.parse(text)
       if (!parsed) return
 
-      var fileChanged = (!root.lyricsData || parsed.file !== root.lyricsData.file || parsed.type !== root.lyricsData.type || parsed.title !== root.lyricsData.title)
+      // Track identity is file + lyrics type only. MPD metadata titles can change
+      // independently of the track, and must not reset the clock or the view.
+      var fileChanged = (!root.lyricsData || parsed.file !== root.lyricsData.file || parsed.type !== root.lyricsData.type)
       var stateChanged = (!root.lyricsData || parsed.state !== root.lyricsData.state)
+      var metaChanged = (!root.lyricsData || parsed.title !== root.lyricsData.title || parsed.artist !== root.lyricsData.artist)
       var mpdElapsed = Number(parsed.elapsed || 0)
 
       if (fileChanged) {
         root.lyricsData = parsed
-        root.currentLines = (parsed && parsed.lines) ? parsed.lines : []
-        root.baseElapsed = mpdElapsed
+        root.currentLines = parsed.lines ? parsed.lines : []
         root.currentElapsed = mpdElapsed
-        root.lastSyncTimestamp = (parsed.state === "playing") ? Date.now() : 0
         root.updateProgress(true)
+        root.scheduleNextLineTimer()
         return
       }
 
-      if (stateChanged) {
+      // Reassign only when something bound actually changed: holding the reference
+      // steady keeps the ListView from re-evaluating delegates mid-song.
+      if (stateChanged || metaChanged) {
         root.lyricsData = parsed
       }
 
+      // Our own seek is still in flight, so this poll predates it in either state.
+      // The state/metadata assignment above still lands; only the clock is held.
+      if (seekGuard.running) return
+
       if (parsed.state !== "playing") {
-        root.baseElapsed = mpdElapsed
+        // Not playing: MPD's elapsed is authoritative and stable.
         root.currentElapsed = mpdElapsed
-        root.lastSyncTimestamp = 0
         root.updateProgress(false)
+        lineAdvanceTimer.stop()
         return
       }
 
-      // Playing state: check for drift or external seek
-      if (root.lastSyncTimestamp === 0) {
-        root.lastSyncTimestamp = Date.now()
-      }
-
       var diff = mpdElapsed - root.currentElapsed
-      if (Math.abs(diff) > 1.2) {
-        // Genuine external seek detected
-        root.baseElapsed = mpdElapsed
+      if (Math.abs(diff) > root.resyncThresholdSec) {
+        // External seek, or the overlay was closed while playback ran on.
         root.currentElapsed = mpdElapsed
-        root.lastSyncTimestamp = Date.now()
         root.updateProgress(true)
-      } else if (diff > 0.1) {
-        // Local timer slightly lagging audio: gently advance
-        root.baseElapsed = mpdElapsed
+        root.scheduleNextLineTimer()
+      } else if (diff > root.catchUpThresholdSec) {
+        // Local clock lagging the audio: catch up.
         root.currentElapsed = mpdElapsed
-        root.lastSyncTimestamp = Date.now()
-      } else {
-        // Monotonic preservation: do NOT jump backward due to IPC/subprocess latency
-        root.baseElapsed = root.currentElapsed
-        root.lastSyncTimestamp = Date.now()
+        root.updateProgress(false)
+        root.scheduleNextLineTimer()
       }
+      // Otherwise keep the local clock. MPD's reading is stale by the subprocess
+      // round-trip, and stepping backwards onto it is what caused the stutter.
     } catch (e) {
       console.warn("Error parsing lyrics JSON:", e)
     }
@@ -233,10 +292,37 @@ Item {
     onTriggered: root.refreshLyrics()
   }
 
+  // Suppresses external-seek reclassification of polls that were already in flight
+  // when the user clicked to seek.
+  Timer {
+    id: seekGuard
+    interval: 400
+    repeat: false
+  }
+
   FrameAnimation {
     id: progressAnim
-    running: root.opened && root.lyricsData && root.lyricsData.state === "playing" && root.lyricsData.type === "synced"
-    onTriggered: root.updateProgress(false)
+    running: root.opened && root.showDurationSweep && root.lyricsData && root.lyricsData.state === "playing" && root.lyricsData.type === "synced"
+    onTriggered: {
+      root.currentElapsed += Math.max(0.0, Math.min(progressAnim.frameTime, root.maxFrameStepSec))
+      root.updateProgress(false)
+    }
+  }
+
+  // Zero-CPU single-shot timer for line transitions when duration sweep is turned off.
+  // It sleeps completely for the entire line duration and fires only once at the line boundary.
+  Timer {
+    id: lineAdvanceTimer
+    interval: 1000
+    repeat: false
+    running: false
+    onTriggered: {
+      if (!root.showDurationSweep && root.lyricsData && root.lyricsData.state === "playing") {
+        root.currentElapsed = root.activeLineEnd + 0.02
+        root.updateProgress(false)
+        root.scheduleNextLineTimer()
+      }
+    }
   }
 
   Process {
@@ -244,6 +330,12 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyLyrics(text)
+    }
+    onExited: {
+      if (root.refreshPending && root.opened) {
+        root.refreshPending = false
+        Qt.callLater(root.refreshLyrics)
+      }
     }
   }
 
@@ -313,6 +405,12 @@ Item {
             return
           }
 
+          if (event.key === Qt.Key_P) {
+            root.toggleDurationSweep()
+            event.accepted = true
+            return
+          }
+
           var canScroll = (root.lyricsData.type === "synced" || root.lyricsData.type === "plain")
           if (!canScroll) return
 
@@ -351,7 +449,7 @@ Item {
         // Header Row
         Item {
           width: parent.width
-          height: Math.max(headerIcon.implicitHeight, headerTextCol.implicitHeight, closeBtn.implicitHeight)
+          height: Math.max(headerIcon.implicitHeight, headerTextCol.implicitHeight, headerActions.implicitHeight)
 
           Text {
             id: headerIcon
@@ -363,24 +461,42 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
           }
 
-          Button {
-            id: closeBtn
+          Row {
+            id: headerActions
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            iconText: "󰅙"
-            iconSize: Style.font.iconSmall
-            foreground: root.foreground
-            horizontalPadding: Style.space(4)
-            verticalPadding: Style.space(2)
-            tooltipText: "Close"
-            onClicked: root.close()
+            spacing: Style.space(4)
+
+            Button {
+              id: sweepToggleBtn
+              visible: root.lyricsData && root.lyricsData.type === "synced"
+              iconText: "󰔛"
+              iconSize: Style.font.iconSmall
+              foreground: root.showDurationSweep ? root.accent : Qt.darker(root.foreground, 1.6)
+              selected: root.showDurationSweep
+              horizontalPadding: Style.space(4)
+              verticalPadding: Style.space(2)
+              tooltipText: root.showDurationSweep ? "Disable line duration sweep (P)" : "Enable line duration sweep (P)"
+              onClicked: root.toggleDurationSweep()
+            }
+
+            Button {
+              id: closeBtn
+              iconText: "󰅙"
+              iconSize: Style.font.iconSmall
+              foreground: root.foreground
+              horizontalPadding: Style.space(4)
+              verticalPadding: Style.space(2)
+              tooltipText: "Close"
+              onClicked: root.close()
+            }
           }
 
           Column {
             id: headerTextCol
             anchors.left: headerIcon.right
             anchors.leftMargin: Style.space(10)
-            anchors.right: closeBtn.left
+            anchors.right: headerActions.left
             anchors.rightMargin: Style.space(10)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(2)
@@ -510,25 +626,27 @@ Item {
                 width: parent.width - Style.space(24)
                 height: parent.height
 
-                // Active line word background fill (sweeps along with progress)
-                Item {
-                  id: wordBgCapsule
-                  visible: lineDelegate.isSyncedActive && lineTextItem.contentWidth > 0
+                // Active line word background fill (sweeps along with progress).
+                // Uses Loader so that when turned off, no Item/Rectangle is created,
+                // zero bindings evaluate, and zero CPU/RAM is consumed.
+                Loader {
+                  id: wordBgLoader
+                  active: root.showDurationSweep && lineDelegate.isSyncedActive && lineTextItem.contentWidth > 0
+                  visible: active
                   anchors.centerIn: parent
                   width: Math.min(parent.width, lineTextItem.contentWidth + Style.space(16))
                   height: Math.min(parent.height - Style.space(2), lineTextItem.contentHeight + Style.space(6))
-                  clip: true
-
-                  // Sweeping background fill contrasting against text
-                  Rectangle {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    width: Math.max(0, Math.min(parent.width, parent.width * root.lineProgress))
-                    radius: Style.space(6)
-                    color: Util.alpha(root.accent, 0.28)
-                    border.color: Util.alpha(root.accent, 0.65)
-                    border.width: 1
+                  sourceComponent: Component {
+                    Rectangle {
+                      anchors.left: parent.left
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      width: Math.max(0, Math.min(parent.width, parent.width * root.lineProgress))
+                      radius: Style.space(6)
+                      color: Util.alpha(root.accent, 0.28)
+                      border.color: Util.alpha(root.accent, 0.65)
+                      border.width: 1
+                    }
                   }
                 }
 
@@ -537,7 +655,7 @@ Item {
                   anchors.centerIn: parent
                   width: parent.width
                   text: lineDelegate.displayText
-                  color: root.foreground
+                  color: (lineDelegate.isSyncedActive && !root.showDurationSweep) ? root.accent : root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: lineDelegate.isSyncedActive ? Style.font.heading : ((Math.abs(lineDelegate.offset) === 1) ? Style.font.body : Style.font.bodySmall)
                   font.bold: lineDelegate.isSyncedActive
@@ -549,7 +667,7 @@ Item {
                     NumberAnimation { duration: 320; easing.type: Easing.OutQuad }
                   }
                   Behavior on color {
-                    ColorAnimation { duration: 250 }
+                    ColorAnimation { duration: 200 }
                   }
                 }
               }
@@ -616,7 +734,7 @@ Item {
             id: hintText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: root.lyricsData.type === "synced" ? "Click line to seek" : (root.lyricsData.type === "plain" ? "Vim: j/k to scroll, d/u half page, gg/G top/bottom" : "")
+            text: root.lyricsData.type === "synced" ? "Click line to seek • p toggle sweep" : (root.lyricsData.type === "plain" ? "Vim: j/k to scroll, d/u half page, gg/G top/bottom" : "")
             color: Qt.darker(root.foreground, 1.6)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
