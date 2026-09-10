@@ -20,9 +20,12 @@ Item {
     duration: 0.0,
     lines: []
   })
+  property var currentLines: []
   property int currentIndex: -1
   property real lineProgress: 0.0
-  property double lastSyncTimestamp: 0
+  property double currentElapsed: 0.0
+  property double baseElapsed: 0.0
+  property double lastSyncTimestamp: 0.0
 
   property string fontFamily: Style.font.family
   property color background: Color.menu.background
@@ -40,7 +43,6 @@ Item {
 
   function open(payloadJson) {
     root.opened = true
-    root.lastSyncTimestamp = Date.now()
     root.refreshLyrics()
     lyricsTimer.restart()
     idleWatcherRetry.stop()
@@ -80,8 +82,9 @@ Item {
   function seekTo(targetSec) {
     Quickshell.execDetached(["bash", root.pluginPath + "/scripts/lyrics.sh", "seek", String(targetSec)])
     if (root.lyricsData && root.lyricsData.type === "synced") {
-      root.lyricsData.elapsed = targetSec
-      root.lastSyncTimestamp = Date.now()
+      root.baseElapsed = targetSec
+      root.currentElapsed = targetSec
+      root.lastSyncTimestamp = (root.lyricsData.state === "playing") ? Date.now() : 0
       root.updateProgress(true)
     }
   }
@@ -93,26 +96,28 @@ Item {
   }
 
   function updateProgress(forceScroll) {
-    if (!root.lyricsData || !root.lyricsData.lines || root.lyricsData.lines.length === 0) {
+    var lines = root.currentLines
+    if (!lines || lines.length === 0) {
       root.currentIndex = -1
       root.lineProgress = 0.0
       return
     }
 
-    if (root.lyricsData.type !== "synced") {
+    if (!root.lyricsData || root.lyricsData.type !== "synced") {
       root.currentIndex = -1
       root.lineProgress = 0.0
       return
     }
 
-    var baseElapsed = Number(root.lyricsData.elapsed || 0)
-    var elapsed = baseElapsed
     if (root.lyricsData.state === "playing" && root.lastSyncTimestamp > 0) {
       var delta = (Date.now() - root.lastSyncTimestamp) / 1000.0
-      elapsed = baseElapsed + Math.max(0.0, delta)
+      var estElapsed = root.baseElapsed + Math.max(0.0, delta)
+      root.currentElapsed = Math.max(root.currentElapsed, estElapsed)
+    } else {
+      root.currentElapsed = root.baseElapsed
     }
 
-    var lines = root.lyricsData.lines
+    var elapsed = root.currentElapsed
     var idx = -1
 
     for (var i = 0; i < lines.length; i++) {
@@ -165,11 +170,55 @@ Item {
   function applyLyrics(text) {
     try {
       var parsed = JSON.parse(text)
-      if (parsed) {
-        var fileChanged = (!root.lyricsData || parsed.file !== root.lyricsData.file)
+      if (!parsed) return
+
+      var fileChanged = (!root.lyricsData || parsed.file !== root.lyricsData.file || parsed.type !== root.lyricsData.type || parsed.title !== root.lyricsData.title)
+      var stateChanged = (!root.lyricsData || parsed.state !== root.lyricsData.state)
+      var mpdElapsed = Number(parsed.elapsed || 0)
+
+      if (fileChanged) {
         root.lyricsData = parsed
+        root.currentLines = (parsed && parsed.lines) ? parsed.lines : []
+        root.baseElapsed = mpdElapsed
+        root.currentElapsed = mpdElapsed
+        root.lastSyncTimestamp = (parsed.state === "playing") ? Date.now() : 0
+        root.updateProgress(true)
+        return
+      }
+
+      if (stateChanged) {
+        root.lyricsData = parsed
+      }
+
+      if (parsed.state !== "playing") {
+        root.baseElapsed = mpdElapsed
+        root.currentElapsed = mpdElapsed
+        root.lastSyncTimestamp = 0
+        root.updateProgress(false)
+        return
+      }
+
+      // Playing state: check for drift or external seek
+      if (root.lastSyncTimestamp === 0) {
         root.lastSyncTimestamp = Date.now()
-        root.updateProgress(fileChanged)
+      }
+
+      var diff = mpdElapsed - root.currentElapsed
+      if (Math.abs(diff) > 1.2) {
+        // Genuine external seek detected
+        root.baseElapsed = mpdElapsed
+        root.currentElapsed = mpdElapsed
+        root.lastSyncTimestamp = Date.now()
+        root.updateProgress(true)
+      } else if (diff > 0.1) {
+        // Local timer slightly lagging audio: gently advance
+        root.baseElapsed = mpdElapsed
+        root.currentElapsed = mpdElapsed
+        root.lastSyncTimestamp = Date.now()
+      } else {
+        // Monotonic preservation: do NOT jump backward due to IPC/subprocess latency
+        root.baseElapsed = root.currentElapsed
+        root.lastSyncTimestamp = Date.now()
       }
     } catch (e) {
       console.warn("Error parsing lyrics JSON:", e)
@@ -178,16 +227,14 @@ Item {
 
   Timer {
     id: lyricsTimer
-    interval: 350
+    interval: 2500
     repeat: true
     running: root.opened
     onTriggered: root.refreshLyrics()
   }
 
-  Timer {
-    id: progressTimer
-    interval: 20
-    repeat: true
+  FrameAnimation {
+    id: progressAnim
     running: root.opened && root.lyricsData && root.lyricsData.state === "playing" && root.lyricsData.type === "synced"
     onTriggered: root.updateProgress(false)
   }
@@ -376,7 +423,7 @@ Item {
                   text: root.lyricsData.type === "synced" ? "SYNCED LRC" : "PLAIN TXT"
                   color: root.lyricsData.type === "synced" ? root.accent : Qt.darker(root.foreground, 1.4)
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.tiny
+                  font.pixelSize: Style.font.caption
                   font.bold: true
                 }
               }
@@ -399,7 +446,7 @@ Item {
           ListView {
             id: lyricsList
             anchors.fill: parent
-            model: root.lyricsData.lines || []
+            model: root.currentLines
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             interactive: root.lyricsData.type === "plain"
@@ -524,7 +571,7 @@ Item {
           // Empty state: No lyrics found
           Column {
             anchors.centerIn: parent
-            visible: root.lyricsData.type === "none" || !root.lyricsData.lines || root.lyricsData.lines.length === 0
+            visible: !root.lyricsData || root.lyricsData.type === "none" || !root.currentLines || root.currentLines.length === 0
             spacing: Style.space(10)
 
             Text {
